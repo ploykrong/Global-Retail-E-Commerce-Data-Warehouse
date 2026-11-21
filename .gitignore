@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+env/
+venv/
+ENV/
+.venv/
+
+# Environment Variables
+.env
+.env.local
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE Files
+.vscode/
+.idea/
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# Airflow / Runtime Logs
+logs/
+airflow.cfg
+airflow.db
+webserver_config.py
+
+# Database binaries
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary / Scratch files
+*.tmp
+debug_*.png

@@ -1,0 +1,167 @@
+version: "3.8"
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:3.3.1-python3.12
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"
+    AIRFLOW__API_AUTH__JWT_SECRET: "retail-dw-jwt-secret-dsi463"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: "Asia/Bangkok"
+    AIRFLOW_CONN_RETAIL_POSTGRES: postgresql://airflow:airflow@postgres:5432/retail_dw
+    _PIP_ADDITIONAL_REQUIREMENTS: "pandas psycopg2-binary numpy"
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./data:/opt/airflow/data
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - retail_network
+
+services:
+  # -------------------------------------------------------------------
+  # PostgreSQL 18 Data Warehouse
+  # -------------------------------------------------------------------
+  postgres:
+    image: postgres:18.6
+    container_name: retail_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "airflow" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - retail_network
+
+  # -------------------------------------------------------------------
+  # Apache Airflow 3 (Init, API-Server, Scheduler, DAG Processor)
+  # -------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    container_name: retail_airflow_init
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: retail_airflow_apiserver
+    command: api-server
+    ports:
+      - "8080:8080" # UI: http://localhost:8080 (admin/admin)
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8080/api/v2/version" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: retail_airflow_scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: retail_airflow_dag_processor
+    command: dag-processor
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # Interactive Streamlit Web Application Dashboard (Prototype)
+  # -------------------------------------------------------------------
+  dashboard:
+    image: python:3.12-slim
+    container_name: retail_streamlit_dashboard
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "8501:8501" # UI: http://localhost:8501
+    command: >
+      bash -c "pip install streamlit pandas numpy plotly &&
+               streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0"
+    networks:
+      - retail_network
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # pgAdmin 4 (PostgreSQL Management)
+  # -------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:9.17
+    container_name: retail_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80" # UI: http://localhost:5050
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./servers.json:/pgadmin4/servers.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - retail_network
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # Grafana 11 Dashboard (Port 3000)
+  # -------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: retail_grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000" # UI: http://localhost:3000 (admin/admin)
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - retail_network
+    restart: unless-stopped
+
+networks:
+  retail_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+  grafana_data:
